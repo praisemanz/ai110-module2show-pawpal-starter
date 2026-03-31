@@ -252,7 +252,7 @@ The tradeoff is: **slot-budget requires no extra data but can miss real conflict
 
 ## 3. AI Collaboration
 
-**a. How you used AI**
+**a. How I used AI**
 
 AI (Claude Code) was used at every phase but for different kinds of tasks:
 
@@ -321,7 +321,7 @@ Verification: `TestConflictSlotBudget::test_conflict_when_slot_overrun` and `Tes
 
 ## 4. Testing and Verification
 
-**a. What you tested**
+**a. What I tested**
 
 40 tests across 12 groups (run with `python -m pytest`).
 
@@ -372,13 +372,13 @@ The gap at ★5 is the Streamlit UI (`app.py`): session state interactions, form
 
 The part of this project I am most satisfied with is the layered conflict detection system. Designing two separate strategies — a coarse slot-budget heuristic and a precise half-open interval check — and choosing which to apply based on available data (slot label vs. exact clock time) felt like a real engineering decision rather than a coding exercise. It forced a deliberate tradeoff: don't require users to supply exact times for every task, but reward them with more precise warnings when they do. That the test suite can independently verify each layer (`TestConflictSlotBudget` and `TestConflictExactTime` are separate classes) confirmed that the design was clean enough to be testable in isolation.
 
-**b. What you would improve**
+**b. What I would improve**
 
 The `depends_on` field stores a task title as a plain string. This works for simple cases but breaks silently if two tasks have the same title or if a title is later renamed. A next iteration would replace the string reference with a direct object reference or a unique ID field, and `build_plan` would resolve dependencies by ID rather than title matching. I would also add cycle detection — currently a circular dependency (A depends on B, B depends on A) causes both tasks to be rejected without an explanatory warning.
 
 **c. Key takeaway**
 
-The most important thing I learned is that **AI tools compress the gap between design and implementation, which makes the design phase more important, not less.** When it took days to write a class hierarchy by hand, a weak design would reveal itself slowly through the friction of coding. With AI assistance, a weak design can be implemented quickly — and then you have a fast, working system with the wrong structure. The phases of this project that paid off most were the ones where I slowed down to ask "what's missing from this model?" before generating any code. The AI was most useful as an accelerator once the design was sound, and most dangerous as a shortcut before it was.
+The most important thing I learned is that **AI tools compress the gap between design and implementation, which makes the design phase more important, not less.** When it took days to write a class hierarchy by hand, a weak design would reveal itself slowly through the friction of coding. With AI assistance, a weak design can be implemented quickly — and then I have a fast, working system with the wrong structure. The phases of this project that paid off most were the ones where I slowed down to ask "what's missing from this model?" before generating any code. The AI was most useful as an accelerator once the design was sound, and most dangerous as a shortcut before it was.
 
 ---
 

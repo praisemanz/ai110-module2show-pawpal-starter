@@ -143,8 +143,13 @@ The original `DailyPlan` stored only the selected tasks, which made `explain()` 
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+The scheduler uses two different conflict-detection strategies, and the choice between them exposes a fundamental tradeoff between simplicity and precision.
+
+**Slot-budget check** treats each `PreferredTime` slot (Morning / Afternoon / Evening) as a fixed-size bucket and fires a warning only when the total minutes in that bucket exceeds a preset limit. This is fast and requires no extra data — every task already has a `preferred_time`. The downside is coarse resolution: two 30-minute tasks both labelled "Morning" are declared fine even if they are meant to run at 7:00 AM simultaneously.
+
+**Exact-time overlap check** solves that precision problem by comparing `[start, start+duration)` intervals in minutes for any task that carries an explicit `scheduled_time`. The condition `a_start < b_end AND b_start < a_end` is a standard half-open-interval overlap test. However, it only fires when both tasks have `scheduled_time` set — tasks without one are silently excluded.
+
+The tradeoff is: **slot-budget requires no extra data but can miss real conflicts; exact-time is precise but degrades silently when clock times are absent.** For a pet-care app where many tasks are loosely time-boxed ("sometime in the morning"), the slot-budget heuristic is a reasonable default. Exact-time detection is available as an opt-in layer for tasks where the owner has fixed a specific time. This layered approach avoids forcing the user to supply exact times for every task while still catching overlaps when that information exists.
 
 ---
 

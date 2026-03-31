@@ -32,6 +32,22 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+## Smarter Scheduling
+
+Phase 3 added four algorithmic improvements to `Scheduler` in `pawpal_system.py`:
+
+**Sorting** — `sort_by_time(tasks)` orders any list of tasks by time slot (Morning → Afternoon → Evening) and then by priority (HIGH first) using a `lambda` key with `sorted()`. Tasks with no preferred time fall to the end.
+
+**Filtering** — `filter_tasks(tasks, pet_name, completed)` returns a subset by pet name and/or completion status. `build_plan` uses this internally to skip completed tasks and tasks belonging to other pets.
+
+**Recurring tasks** — `Task.recurring_days` sets a repeat cadence (e.g. `1` = daily). Calling `mark_complete()` on a recurring task returns a new `Task` instance whose `due_date` is advanced by `timedelta(days=recurring_days)`. The caller appends the returned task to the pool for the next day's plan.
+
+**Conflict detection** — `detect_conflicts(tasks)` returns warning strings (never raises) for two scenarios:
+- *Slot-budget overrun*: tasks in the same `PreferredTime` slot whose combined duration exceeds the per-slot limit.
+- *Exact-time overlap*: any two tasks with `scheduled_time` set whose `[start, start+duration)` intervals intersect, using the condition `a_start < b_end AND b_start < a_end`.
+
+Run `python main.py` to see all four features demonstrated in the terminal.
+
 ### Suggested workflow
 
 1. Read the scenario carefully and identify requirements and edge cases.

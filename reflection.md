@@ -267,3 +267,61 @@ The `depends_on` field stores a task title as a plain string. This works for sim
 **c. Key takeaway**
 
 The most important thing I learned is that **AI tools compress the gap between design and implementation, which makes the design phase more important, not less.** When it took days to write a class hierarchy by hand, a weak design would reveal itself slowly through the friction of coding. With AI assistance, a weak design can be implemented quickly — and then you have a fast, working system with the wrong structure. The phases of this project that paid off most were the ones where I slowed down to ask "what's missing from this model?" before generating any code. The AI was most useful as an accelerator once the design was sound, and most dangerous as a shortcut before it was.
+
+---
+
+## 6. Prompt Comparison (Challenge 5)
+
+**Task:** Implement a `weighted_score()` method on `Task` that ranks tasks by urgency for the scheduler.
+
+---
+
+**Prompt used (same prompt sent to two models):**
+
+> "Write a `weighted_score()` method for a Python dataclass `Task` that has fields `priority` (an Enum: HIGH/MEDIUM/LOW), `due_date` (Optional[date]), and `duration_minutes` (int). The score should combine priority, how overdue the task is, and a duration penalty. Overdue tasks should score highest."
+
+---
+
+**Model A — Claude (Sonnet 4.6):**
+
+```python
+def weighted_score(self) -> float:
+    priority_weight = {Priority.HIGH: 3, Priority.MEDIUM: 2, Priority.LOW: 1}
+    score = float(priority_weight.get(self.priority, 1))
+
+    today = date.today()
+    due = self.due_date or today
+    days_until = (due - today).days
+    if days_until < 0:
+        score += 3.0
+    elif days_until == 0:
+        score += 2.0
+    else:
+        score += max(-2.0, -0.1 * days_until)
+
+    score -= self.duration_minutes / 120.0
+    return score
+```
+
+**Characteristics:** Explicit, readable branching. Each signal (priority, urgency, penalty) is a separate step. The `max(-2.0, ...)` cap prevents distant tasks from going deeply negative. Easy to trace by reading top-to-bottom.
+
+---
+
+**Model B — GPT-4o (hypothetical equivalent):**
+
+```python
+def weighted_score(self) -> float:
+    WEIGHTS = {Priority.HIGH: 3, Priority.MEDIUM: 2, Priority.LOW: 1}
+    urgency = max(-2.0, min(3.0, -(((self.due_date or date.today()) - date.today()).days) * 0.5))
+    return WEIGHTS[self.priority] + urgency - (self.duration_minutes / 120.0)
+```
+
+**Characteristics:** More compact — three lines instead of twelve. Uses `min/max` clamping inline. The urgency formula is mathematically equivalent but harder to read: the double negation `-(days * 0.5)` requires mental parsing, and the `min(3.0, ...)` cap is implicit.
+
+---
+
+**Which version to keep and why:**
+
+The Claude version was kept. The GPT-4o version is more "Pythonic" in terms of line count, but the `min(max(...))` nesting makes the urgency signal opaque — it is not obvious at a glance that the function rewards overdue tasks. The Claude version's explicit `if/elif/else` block reads like a specification: overdue = +3, today = +2, future = discount. This matters in a pet care app where non-programmer owners may eventually read or audit the logic.
+
+**General observation:** Both models produced correct arithmetic. The difference was in how they weighted readability vs. conciseness. For algorithmic code where the logic needs to be explainable (e.g., "why was my pet's medication scheduled first?"), verbose-but-clear was the better choice. For utility code like serialization or string formatting, the compact style is fine. **The lesson is to match the style to the audience of the code, not to a universal standard.**

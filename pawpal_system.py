@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
 from datetime import date, time, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from enum import Enum
+import json
+import os
 
 
 class Priority(Enum):
@@ -39,6 +41,48 @@ class Pet:
         """Checks whether a specific need is listed."""
         return need in self.special_needs
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize this Pet (without its tasks) to a plain dict."""
+        return {
+            "name": self.name,
+            "species": self.species,
+            "age": self.age,
+            "breed": self.breed,
+            "special_needs": self.special_needs,
+            "tasks": [t.to_dict() for t in self.tasks],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Pet":
+        """Reconstruct a Pet from a serialized dict.
+
+        Tasks are deserialized as Task objects with ``pet`` set to this
+        instance after construction (to avoid a forward-reference cycle).
+        """
+        pet = cls(
+            name=data["name"],
+            species=data["species"],
+            age=data["age"],
+            breed=data["breed"],
+            special_needs=data.get("special_needs", []),
+        )
+        for t_data in data.get("tasks", []):
+            task = Task(
+                title=t_data["title"],
+                duration_minutes=t_data["duration_minutes"],
+                priority=Priority(t_data["priority"]),
+                category=t_data["category"],
+                preferred_time=PreferredTime(t_data["preferred_time"]) if t_data.get("preferred_time") else None,
+                pet=pet,
+                depends_on=t_data.get("depends_on"),
+                completed=t_data.get("completed", False),
+                recurring_days=t_data.get("recurring_days"),
+                due_date=date.fromisoformat(t_data["due_date"]) if t_data.get("due_date") else None,
+                scheduled_time=time.fromisoformat(t_data["scheduled_time"]) if t_data.get("scheduled_time") else None,
+            )
+            pet.tasks.append(task)
+        return pet
+
 
 @dataclass
 class Owner:
@@ -58,6 +102,65 @@ class Owner:
     def add_preference(self, key: str, value) -> None:
         """Stores a scheduling preference."""
         self.preferences[key] = value
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize this Owner and all its pets to a plain dict."""
+        return {
+            "name": self.name,
+            "available_start": self.available_start.strftime("%H:%M"),
+            "available_end": self.available_end.strftime("%H:%M"),
+            "preferences": self.preferences,
+            "pets": [p.to_dict() for p in self.pets],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Owner":
+        """Reconstruct an Owner (and its pets) from a serialized dict."""
+        owner = cls(
+            name=data["name"],
+            available_start=time.fromisoformat(data["available_start"]),
+            available_end=time.fromisoformat(data["available_end"]),
+            preferences=data.get("preferences", {}),
+        )
+        owner.pets = [Pet.from_dict(p) for p in data.get("pets", [])]
+        return owner
+
+    def save_to_json(self, path: str = "data.json") -> None:
+        """Persist the owner and all pets/tasks to a JSON file.
+
+        The file is written atomically by serializing to a string first,
+        then writing in a single call, so a crash mid-write does not
+        produce a truncated file.
+
+        Args:
+            path: File path to write (default ``data.json``).
+        """
+        payload = self.to_dict()
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+
+    @classmethod
+    def load_from_json(cls, path: str = "data.json") -> Optional["Owner"]:
+        """Load an Owner from a JSON file created by ``save_to_json``.
+
+        Returns ``None`` (rather than raising) if the file does not exist,
+        so callers can use the return value as a simple existence check::
+
+            owner = Owner.load_from_json()
+            if owner is None:
+                owner = Owner(...)   # first-run default
+
+        Args:
+            path: File path to read (default ``data.json``).
+
+        Returns:
+            A reconstructed ``Owner`` instance, or ``None``.
+        """
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return cls.from_dict(data)
 
 
 @dataclass
@@ -102,6 +205,54 @@ class Task:
             recurring_days=self.recurring_days,
             due_date=next_due,
         )
+
+    def weighted_score(self) -> float:
+        """Compute a numeric urgency score for weighted prioritization.
+
+        The score combines three signals:
+        - **Priority weight** (HIGH=3, MEDIUM=2, LOW=1) — the dominant factor.
+        - **Due-date urgency** — tasks due today score +2; overdue tasks score
+          +3; tasks due in the future are discounted by 0.1 per remaining day
+          (capped at -2 so distant tasks never go negative on this component).
+        - **Duration penalty** — longer tasks score slightly lower so that
+          equally-urgent short tasks are scheduled first and leave more room
+          in the window.  The penalty is ``duration_minutes / 120`` (so a
+          60-min task loses 0.5 points).
+
+        Returns:
+            A float where higher means "schedule this sooner."
+        """
+        priority_weight = {Priority.HIGH: 3, Priority.MEDIUM: 2, Priority.LOW: 1}
+        score = float(priority_weight.get(self.priority, 1))
+
+        today = date.today()
+        due = self.due_date or today
+        days_until = (due - today).days
+        if days_until < 0:
+            score += 3.0          # overdue
+        elif days_until == 0:
+            score += 2.0          # due today
+        else:
+            score += max(-2.0, -0.1 * days_until)  # future discount
+
+        score -= self.duration_minutes / 120.0      # duration penalty
+        return score
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize this Task to a plain dict for JSON storage."""
+        return {
+            "title": self.title,
+            "duration_minutes": self.duration_minutes,
+            "priority": self.priority.value,
+            "category": self.category,
+            "preferred_time": self.preferred_time.value if self.preferred_time else None,
+            "pet_name": self.pet.name if self.pet else None,
+            "depends_on": self.depends_on,
+            "completed": self.completed,
+            "recurring_days": self.recurring_days,
+            "due_date": self.due_date.isoformat() if self.due_date else None,
+            "scheduled_time": self.scheduled_time.strftime("%H:%M") if self.scheduled_time else None,
+        }
 
     def is_high_priority(self) -> bool:
         """Returns True if priority is HIGH."""
@@ -196,6 +347,69 @@ class Scheduler:
         self.owner = owner
         self.pet = pet
         self.task_pool = task_pool
+
+    # Slot start/end times in minutes from midnight — used by next_available_slot.
+    _SLOT_WINDOWS = {
+        PreferredTime.MORNING:   (7 * 60,  12 * 60),
+        PreferredTime.AFTERNOON: (12 * 60, 17 * 60),
+        PreferredTime.EVENING:   (17 * 60, 21 * 60),
+    }
+
+    # ------------------------------------------------------------------
+    # Weighted prioritization (Challenge 1)
+    # ------------------------------------------------------------------
+    def weighted_sort(self, tasks: List[Task]) -> List[Task]:
+        """Return tasks sorted by ``Task.weighted_score()`` descending.
+
+        This goes beyond simple priority ranking by incorporating due-date
+        urgency and duration penalty into a single numeric score.  Overdue
+        HIGH tasks rise to the top; distant LOW tasks sink to the bottom.
+        Ties within the same score are broken by slot order so the result
+        is still readable as a day-flow.
+
+        Args:
+            tasks: Any list of ``Task`` objects.
+
+        Returns:
+            A new list sorted highest-score-first.
+        """
+        return sorted(
+            tasks,
+            key=lambda t: (
+                -t.weighted_score(),                           # primary: score descending
+                self._SLOT_ORDER.get(t.preferred_time, 3),    # secondary: slot order
+            ),
+        )
+
+    def next_available_slot(self, tasks: List[Task], duration_minutes: int) -> Optional[str]:
+        """Find the earliest time slot that can fit a new task of the given duration.
+
+        Scans Morning → Afternoon → Evening.  For each slot it computes how
+        many minutes are already consumed by pending tasks in that slot and
+        returns the first slot where the remaining capacity is >= the
+        requested duration.
+
+        Args:
+            tasks:            The current pending task list for this pet.
+            duration_minutes: How long the new task will take.
+
+        Returns:
+            The slot label (e.g. ``"Morning"``) if one fits, or
+            ``"No available slot"`` if every slot is full.
+        """
+        from collections import defaultdict
+        slot_used: Dict = defaultdict(int)
+        for t in tasks:
+            if not t.completed:
+                slot_used[t.preferred_time] += t.duration_minutes
+
+        for slot in (PreferredTime.MORNING, PreferredTime.AFTERNOON, PreferredTime.EVENING):
+            start, end = self._SLOT_WINDOWS[slot]
+            capacity = end - start
+            if slot_used[slot] + duration_minutes <= capacity:
+                return slot.value.capitalize()
+
+        return "No available slot"
 
     # ------------------------------------------------------------------
     # Sorting

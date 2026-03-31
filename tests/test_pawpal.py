@@ -8,6 +8,9 @@ Covers:
 - Recurrence logic (mark_complete with timedelta)
 - Conflict detection — slot-budget overrun
 - Conflict detection — exact-time overlap
+- Weighted scoring and weighted_sort
+- next_available_slot
+- JSON persistence (save_to_json / load_from_json)
 - Dependency resolution in build_plan
 - Edge cases: pet with no tasks, duplicate times, one-off task recurrence
 """
@@ -360,3 +363,112 @@ class TestWindowCheck:
         new_task = make_task("Extra", duration=1, pet=pet)
         sched = Scheduler(tiny_owner, pet, [])
         assert sched.fits_in_window(new_task, plan) is False
+
+
+# ---------------------------------------------------------------------------
+# 10. Weighted scoring (Challenge 1)
+# ---------------------------------------------------------------------------
+
+class TestWeightedScore:
+    def test_overdue_scores_higher_than_future(self, buddy):
+        from datetime import timedelta
+        overdue = make_task("Med",  priority=Priority.HIGH, pet=buddy,
+                            due_date=date.today() - timedelta(days=1))
+        future  = make_task("Bath", priority=Priority.LOW,  pet=buddy,
+                            due_date=date.today() + timedelta(days=14))
+        assert overdue.weighted_score() > future.weighted_score()
+
+    def test_high_priority_outscores_low_same_date(self, buddy):
+        high = make_task("A", priority=Priority.HIGH, pet=buddy, due_date=date.today())
+        low  = make_task("B", priority=Priority.LOW,  pet=buddy, due_date=date.today())
+        assert high.weighted_score() > low.weighted_score()
+
+    def test_longer_task_penalised(self, buddy):
+        short = make_task("S", priority=Priority.HIGH, duration=10,  pet=buddy, due_date=date.today())
+        long_ = make_task("L", priority=Priority.HIGH, duration=120, pet=buddy, due_date=date.today())
+        assert short.weighted_score() > long_.weighted_score()
+
+    def test_weighted_sort_orders_by_score_desc(self, owner, buddy):
+        from datetime import timedelta
+        urgent = make_task("Urgent", priority=Priority.HIGH, pet=buddy,
+                           due_date=date.today() - timedelta(days=2))
+        low    = make_task("Low",    priority=Priority.LOW,  pet=buddy,
+                           due_date=date.today() + timedelta(days=10))
+        sched = Scheduler(owner, buddy, [low, urgent])
+        result = sched.weighted_sort([low, urgent])
+        assert result[0].title == "Urgent"
+
+
+# ---------------------------------------------------------------------------
+# 11. Next available slot (Challenge 1)
+# ---------------------------------------------------------------------------
+
+class TestNextAvailableSlot:
+    def test_empty_pool_returns_morning(self, owner, buddy):
+        sched = Scheduler(owner, buddy, [])
+        assert sched.next_available_slot([], 30) == "Morning"
+
+    def test_full_morning_suggests_afternoon(self, owner, buddy):
+        # Fill morning with 290 min — adding 30 more would exceed 300
+        tasks = [make_task(f"T{i}", duration=290, slot=PreferredTime.MORNING, pet=buddy)
+                 for i in range(1)]
+        sched = Scheduler(owner, buddy, tasks)
+        result = sched.next_available_slot(tasks, 30)
+        assert result == "Afternoon"
+
+    def test_all_slots_full_returns_no_available(self, owner, buddy):
+        tasks = [
+            make_task("AM",  duration=300, slot=PreferredTime.MORNING,   pet=buddy),
+            make_task("PM",  duration=300, slot=PreferredTime.AFTERNOON,  pet=buddy),
+            make_task("Eve", duration=240, slot=PreferredTime.EVENING,    pet=buddy),
+        ]
+        sched = Scheduler(owner, buddy, tasks)
+        assert sched.next_available_slot(tasks, 1) == "No available slot"
+
+
+# ---------------------------------------------------------------------------
+# 12. JSON persistence (Challenge 2)
+# ---------------------------------------------------------------------------
+
+class TestPersistence:
+    def test_round_trip_owner(self, tmp_path, buddy):
+        path = str(tmp_path / "data.json")
+        owner = Owner(name="Alex", available_start=time(7, 0), available_end=time(20, 0))
+        task = make_task("Walk", priority=Priority.HIGH, slot=PreferredTime.MORNING,
+                         duration=30, pet=buddy, due_date=date.today())
+        buddy.tasks.append(task)
+        owner.pets.append(buddy)
+        owner.save_to_json(path)
+        loaded = Owner.load_from_json(path)
+        assert loaded.name == "Alex"
+        assert loaded.pets[0].name == "Buddy"
+        assert loaded.pets[0].tasks[0].title == "Walk"
+        assert loaded.pets[0].tasks[0].priority == Priority.HIGH
+
+    def test_load_returns_none_when_missing(self, tmp_path):
+        result = Owner.load_from_json(str(tmp_path / "nonexistent.json"))
+        assert result is None
+
+    def test_task_metadata_survives_round_trip(self, tmp_path, buddy):
+        path = str(tmp_path / "data.json")
+        from datetime import timedelta
+        owner = Owner("Jo", time(8, 0), time(18, 0))
+        task = Task(
+            title="Supplement",
+            duration_minutes=5,
+            priority=Priority.HIGH,
+            category="Health",
+            preferred_time=PreferredTime.MORNING,
+            pet=buddy,
+            recurring_days=1,
+            due_date=date.today(),
+            completed=False,
+        )
+        buddy.tasks.append(task)
+        owner.pets.append(buddy)
+        owner.save_to_json(path)
+        loaded = Owner.load_from_json(path)
+        t = loaded.pets[0].tasks[0]
+        assert t.recurring_days == 1
+        assert t.due_date == date.today()
+        assert t.preferred_time == PreferredTime.MORNING

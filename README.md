@@ -2,6 +2,36 @@
 
 A smart pet care scheduling assistant built with Python and Streamlit.
 
+## Challenge Extensions
+
+### Challenge 1: Weighted Prioritization + Next Available Slot
+
+Two new methods were added to `Scheduler` in `pawpal_system.py`:
+
+**`weighted_sort(tasks)`** — goes beyond simple priority ranking by computing a numeric `weighted_score()` per task that combines three signals:
+- **Priority weight** (HIGH=3, MEDIUM=2, LOW=1)
+- **Due-date urgency** — overdue tasks +3, due today +2, future tasks discounted by 0.1/day
+- **Duration penalty** — longer tasks lose `duration_minutes / 120` points so short urgent tasks schedule first
+
+**`next_available_slot(tasks, duration_minutes)`** — scans Morning → Afternoon → Evening and returns the first slot that still has capacity for a task of the given duration.  Shown as a hint in the UI when adding tasks.
+
+The UI exposes both as a sort-mode radio button ("Time slot + priority" vs "Weighted score") and a hint below each task form.
+
+### Challenge 2: Data Persistence
+
+`Owner` now has four methods for JSON round-tripping:
+- `to_dict()` / `from_dict()` — custom dict serialization (no third-party library needed)
+- `save_to_json(path)` — writes owner + all pets + all tasks to `data.json`
+- `load_from_json(path)` — reconstructs the full object graph; returns `None` if no file exists
+
+The app loads `data.json` on startup and saves automatically after every "Save owner", "Add pet", and "Add task" action, so the session survives browser refreshes.
+
+### Challenge 3 + 4: Priority Emojis and Category Icons
+
+Every task row in the UI now shows:
+- 🔴 HIGH / 🟡 MEDIUM / 🟢 LOW priority indicator
+- Category icons: 🏃 Exercise, 🍽️ Feeding, 💊 Health, ✂️ Grooming, 🎾 Play, 🎓 Training, 📋 General
+
 ## Features
 
 | Feature | How it works |

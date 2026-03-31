@@ -1,5 +1,26 @@
 # PawPal+ (Module 2 Project)
 
+A smart pet care scheduling assistant built with Python and Streamlit.
+
+## Features
+
+| Feature | How it works |
+|---|---|
+| **Multi-pet support** | Register any number of pets per owner session; each gets its own task pool and daily plan |
+| **Priority scheduling** | Tasks are graded `LOW / MEDIUM / HIGH` using an `Enum`; `build_plan` places HIGH tasks first |
+| **Sorting by time slot** | `Scheduler.sort_by_time()` orders tasks `Morning → Afternoon → Evening` using a `lambda` tuple key with `sorted()` |
+| **Smart filtering** | `filter_tasks()` isolates tasks by pet name (case-insensitive) or completion status; completed tasks are never re-scheduled |
+| **Conflict detection — slot budget** | Warns when the total minutes in a time slot exceed a per-slot limit (Morning: 300 min, Afternoon: 300 min, Evening: 240 min) |
+| **Conflict detection — exact overlap** | For tasks with `scheduled_time` set, flags any two whose `[start, start+duration)` intervals intersect using the condition `a_start < b_end AND b_start < a_end` |
+| **Recurring tasks** | Set `recurring_days` on a task; `mark_complete()` returns a new `Task` with `due_date` advanced by `timedelta(days=N)` |
+| **Dependency ordering** | A task's `depends_on` field names its prerequisite; `build_plan` uses a two-pass loop to enforce sequencing |
+| **Window enforcement** | `fits_in_window()` compares cumulative plan duration against the owner's available minutes; over-budget tasks go to `rejected_tasks` |
+| **Table display** | `DailyPlan.display()` renders a Unicode box-drawing table with dynamic column widths, truncating long titles at 26 characters |
+
+## 📸 Demo
+
+*Run the app with `streamlit run app.py` and open [http://localhost:8501](http://localhost:8501).*
+
 You are building **PawPal+**, a Streamlit app that helps a pet owner plan care tasks for their pet.
 
 ## Scenario

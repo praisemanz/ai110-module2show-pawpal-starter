@@ -32,6 +32,30 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+## Testing PawPal+
+
+Run the full test suite with:
+
+```bash
+python -m pytest
+```
+
+**30 tests across 9 areas:**
+
+| Group | What it verifies |
+|---|---|
+| `TestMarkComplete` | `completed` flips to `True`; one-off tasks return `None`; idempotent on repeat calls |
+| `TestRecurrence` | Daily/weekly tasks spawn a new instance with `due_date + timedelta(days=N)`; metadata is preserved |
+| `TestPetTaskList` | `add_task` grows the pet's list; a pet with no tasks produces an empty plan |
+| `TestSortByTime` | Morning → Afternoon → Evening order; HIGH before LOW within a slot; unslotted tasks fall last |
+| `TestFilterTasks` | Filter by pet name (case-insensitive), completion status, or both; completed tasks excluded from `build_plan` |
+| `TestConflictSlotBudget` | No warning within budget; warning fires when slot total exceeds limit |
+| `TestConflictExactTime` | Overlapping intervals flagged; back-to-back intervals safe; tasks without `scheduled_time` never flagged |
+| `TestDependencies` | Dependent task placed after its prerequisite; unresolvable dependency goes to `rejected_tasks` |
+| `TestWindowCheck` | Task rejected when it would exceed owner's window; `fits_in_window` returns correct bool |
+
+**Confidence: ★★★★☆** — all happy paths and key edge cases are covered. The main untested area is the Streamlit UI layer (`app.py`), which requires browser interaction to test meaningfully.
+
 ## Smarter Scheduling
 
 Phase 3 added four algorithmic improvements to `Scheduler` in `pawpal_system.py`:

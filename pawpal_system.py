@@ -29,20 +29,45 @@ class Pet:
     tasks: List = field(default_factory=list)
 
     def add_task(self, task) -> None:
-        """Adds a task to this pet's task list."""
+        """Append a task to this pet's personal task list.
+
+        Args:
+            task: The ``Task`` instance to add.  The task is appended at the
+                end of the list; ordering is handled by the ``Scheduler``.
+        """
         self.tasks.append(task)
 
     def get_profile(self) -> str:
-        """Returns a summary string of the pet's details."""
+        """Build a human-readable one-line summary of this pet.
+
+        Returns:
+            A string in the format
+            ``"<name> (<species>, <breed>, age <age>) | Special needs: <needs>"``
+            where ``<needs>`` is a comma-separated list or ``"none"``.
+        """
         needs = ", ".join(self.special_needs) if self.special_needs else "none"
         return f"{self.name} ({self.species}, {self.breed}, age {self.age}) | Special needs: {needs}"
 
     def has_special_need(self, need: str) -> bool:
-        """Checks whether a specific need is listed."""
+        """Check whether a specific care requirement is registered for this pet.
+
+        Args:
+            need: The need string to look up (exact match, case-sensitive).
+
+        Returns:
+            ``True`` if ``need`` is in ``special_needs``, ``False`` otherwise.
+        """
         return need in self.special_needs
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize this Pet (without its tasks) to a plain dict."""
+        """Serialize this Pet and all its tasks to a plain dict for JSON storage.
+
+        Returns:
+            A ``dict`` containing all scalar fields plus a ``"tasks"`` key
+            whose value is a list of task dicts produced by
+            ``Task.to_dict()``.  The result is JSON-serializable without any
+            third-party library.
+        """
         return {
             "name": self.name,
             "species": self.species,
@@ -94,13 +119,32 @@ class Owner:
     pets: List[Pet] = field(default_factory=list)
 
     def get_available_minutes(self) -> int:
-        """Computes total minutes free in the day."""
+        """Compute the total number of minutes the owner is free today.
+
+        Converts ``available_start`` and ``available_end`` to minutes-from-
+        midnight and returns their difference.  This value is the hard daily
+        budget that ``Scheduler.fits_in_window()`` enforces.
+
+        Returns:
+            An ``int`` representing minutes of availability, e.g. 780 for a
+            07:00–20:00 window.
+        """
         start = self.available_start.hour * 60 + self.available_start.minute
         end = self.available_end.hour * 60 + self.available_end.minute
         return end - start
 
     def add_preference(self, key: str, value) -> None:
-        """Stores a scheduling preference."""
+        """Store or update a scheduling preference.
+
+        Preferences are open-ended key/value pairs (e.g.
+        ``add_preference("no_tasks_after", "21:00")``).  They are persisted
+        in ``data.json`` via ``save_to_json`` and available to custom
+        scheduling extensions.
+
+        Args:
+            key:   Preference name (e.g. ``"preferred_walk_time"``).
+            value: Preference value; any JSON-serializable type is accepted.
+        """
         self.preferences[key] = value
 
     def to_dict(self) -> Dict[str, Any]:
@@ -239,7 +283,18 @@ class Task:
         return score
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize this Task to a plain dict for JSON storage."""
+        """Serialize this Task to a plain dict for JSON storage.
+
+        Enum values are stored as their string ``value`` so the JSON is
+        human-readable.  ``date`` and ``time`` fields are stored as ISO-8601
+        strings.  The ``pet`` field is stored as ``pet_name`` (a string) to
+        avoid circular serialization; ``Pet.from_dict`` re-links the
+        reference after construction.
+
+        Returns:
+            A flat ``dict`` of primitive types, safe to pass to
+            ``json.dump()``.
+        """
         return {
             "title": self.title,
             "duration_minutes": self.duration_minutes,
@@ -255,11 +310,22 @@ class Task:
         }
 
     def is_high_priority(self) -> bool:
-        """Returns True if priority is HIGH."""
+        """Check whether this task is flagged as high priority.
+
+        Returns:
+            ``True`` if ``self.priority == Priority.HIGH``, ``False`` otherwise.
+        """
         return self.priority == Priority.HIGH
 
     def summary(self) -> str:
-        """Returns a one-line description of the task."""
+        """Build a concise one-line description of this task for CLI output.
+
+        Returns:
+            A string formatted as
+            ``"[PRIORITY] title (duration min | Slot) — PetName"``.
+            Uses ``"Unassigned"`` if no pet is set and ``"Anytime"`` if no
+            preferred time is set.
+        """
         pet_name = self.pet.name if self.pet else "Unassigned"
         time_pref = self.preferred_time.value.capitalize() if self.preferred_time else "Anytime"
         return f"[{self.priority.value.upper()}] {self.title} ({self.duration_minutes} min | {time_pref}) — {pet_name}"
@@ -281,11 +347,25 @@ class DailyPlan:
         return sum(t.duration_minutes for t in self.scheduled_tasks)
 
     def add_task(self, task: Task) -> None:
-        """Appends a task to scheduled_tasks."""
+        """Append a task to the scheduled task list.
+
+        Args:
+            task: The ``Task`` to schedule.  ``total_duration`` updates
+                automatically because it is a computed ``@property``.
+        """
         self.scheduled_tasks.append(task)
 
     def display(self) -> str:
-        """Formats the plan as a compact Unicode table."""
+        """Render this plan as a compact Unicode box-drawing table.
+
+        Column widths are computed dynamically from the actual data so the
+        table is always tight.  Task titles longer than 26 characters are
+        truncated with an ellipsis (``…``).
+
+        Returns:
+            A multi-line string suitable for ``print()`` or
+            ``st.code(..., language=None)`` in Streamlit.
+        """
         SLOT = {
             PreferredTime.MORNING: "AM",
             PreferredTime.AFTERNOON: "Afternoon",
@@ -324,7 +404,12 @@ class DailyPlan:
         return "\n".join(lines)
 
     def explain(self) -> str:
-        """Narrates why each task was included and in what order."""
+        """Narrate why each scheduled task was included and in what order.
+
+        Returns:
+            A multi-line string, one bullet per task, stating whether it was
+            chosen for high priority or a lower priority level.
+        """
         lines = [f"Explanation for {self.pet.name}'s plan:"]
         for task in self.scheduled_tasks:
             reason = "high priority" if task.is_high_priority() else f"{task.priority.value} priority"
@@ -519,14 +604,39 @@ class Scheduler:
     # Window check
     # ------------------------------------------------------------------
     def fits_in_window(self, task: Task, plan: DailyPlan) -> bool:
-        """Return True if adding task keeps total duration within owner's available minutes."""
+        """Check whether adding a task would keep the plan within the owner's daily budget.
+
+        Compares the plan's current ``total_duration`` plus the candidate
+        task's ``duration_minutes`` against ``Owner.get_available_minutes()``.
+        The check is non-destructive — the task is not added here.
+
+        Args:
+            task: The candidate ``Task`` to evaluate.
+            plan: The ``DailyPlan`` being built (read-only in this method).
+
+        Returns:
+            ``True`` if the task fits; ``False`` if it would exceed the budget.
+        """
         return plan.total_duration + task.duration_minutes <= self.owner.get_available_minutes()
 
     # ------------------------------------------------------------------
     # Build plan
     # ------------------------------------------------------------------
     def build_plan(self) -> DailyPlan:
-        """Build a DailyPlan by sorting pending tasks, honouring depends_on, and respecting the time window."""
+        """Build a ``DailyPlan`` for this pet using the full scheduling pipeline.
+
+        Steps:
+        1. Filter ``task_pool`` to incomplete tasks assigned to this pet.
+        2. Sort filtered tasks by slot then priority via ``sort_by_time()``.
+        3. Run a two-pass dependency loop: tasks whose ``depends_on``
+           prerequisite is not yet scheduled are deferred to a second pass.
+        4. Use ``fits_in_window()`` to enforce the owner's time budget;
+           tasks that don't fit go to ``DailyPlan.rejected_tasks``.
+
+        Returns:
+            A ``DailyPlan`` with ``scheduled_tasks`` in execution order and
+            ``rejected_tasks`` listing anything that couldn't be scheduled.
+        """
         plan = DailyPlan(date=date.today(), owner=self.owner, pet=self.pet, task_pool=self.task_pool)
 
         # Only schedule incomplete tasks for this pet.

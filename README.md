@@ -4,6 +4,16 @@ A smart pet care scheduling assistant built with Python and Streamlit.
 
 ## Challenge Extensions
 
+### How Agent Mode Was Used
+
+Agent Mode (Claude Code) was used to plan and execute multi-file changes that would have been tedious to coordinate by hand:
+
+1. **Challenge 1 — Weighted prioritization and next-slot algorithm:** The agent was given the full `pawpal_system.py` context and asked to design a scoring formula that combined priority weight, due-date urgency, and duration penalty into a single float. It identified that the three signals needed independent caps (duration penalty bounded, future discount bounded at −2) and that the sort needed a secondary tie-breaker (slot order) to remain readable. It then added `weighted_score()` on `Task` and both `weighted_sort()` and `next_available_slot()` on `Scheduler` in a single coordinated edit, followed by updating `app.py` to expose the sort-mode toggle.
+
+2. **Challenge 2 — Data persistence:** The agent was given the prompt: *"Add `save_to_json` and `load_from_json` methods to the `Owner` class in `pawpal_system.py`, then update `app.py` to load this data on startup."* It planned a three-layer serialization chain (`Task.to_dict` → `Pet.to_dict` → `Owner.to_dict`) to avoid the circular reference that would occur if pets serialized their tasks and tasks serialized their pets. It then updated `app.py` in four places: startup load, owner save, pet add, and task add — all in one coordinated session.
+
+3. **Challenge 5 — Test suite edge cases:** The agent was prompted for edge cases for each feature before writing tests, producing the non-obvious scenarios listed in `reflection.md` Section 4a.
+
 ### Challenge 1: Weighted Prioritization + Next Available Slot
 
 Two new methods were added to `Scheduler` in `pawpal_system.py`:

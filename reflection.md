@@ -133,6 +133,57 @@ classDiagram
 
 ---
 
+## 1b. Bugs and Design Issues Found and Fixed
+
+The starter code provided class skeletons with all method bodies set to `pass`. During implementation, five concrete issues were identified, each with observable incorrect behavior.
+
+---
+
+**Issue 1 — Syntax bug: backslash inside f-string expression**
+
+- **Location:** `main.py` line 119 (original version)
+- **Actual behavior:** Running `python main.py` raised `SyntaxError: f-string expression part cannot include a backslash`. The header line `f"{'Today\\'s Schedule':^{WIDTH}}"` used an escaped apostrophe inside the `{}` format expression, which Python's f-string parser rejects in all versions before 3.12.
+- **Expected behavior:** The schedule header should print centered without crashing.
+- **Fix applied:** Extracted the title string to a variable `SCHEDULE_TITLE = "PawPal+ — Today's Schedule"` and interpolated the variable: `f"{SCHEDULE_TITLE:^{WIDTH}}"`. The backslash issue disappears because the apostrophe is now in a plain string, not inside `{}`.
+
+---
+
+**Issue 2 — Logic bug: `total_duration` as a mutable field could silently drift out of sync**
+
+- **Location:** `pawpal_system.py` — `DailyPlan` class, `total_duration` field (original stub)
+- **Actual behavior:** As a plain `int = 0` dataclass field, `total_duration` would stay `0` forever unless every caller manually incremented it after each `add_task()`. Any code that appended directly to `scheduled_tasks` would leave `total_duration` wrong with no error.
+- **Expected behavior:** `total_duration` should always equal the sum of `duration_minutes` across all scheduled tasks, with no possibility of going stale.
+- **Fix applied:** Converted to a `@property` that computes `sum(t.duration_minutes for t in self.scheduled_tasks)` on demand (`pawpal_system.py`, `DailyPlan.total_duration`). No separate state to maintain — the value is derived, not stored.
+
+---
+
+**Issue 3 — Logic bug: `build_plan()` and `fits_in_window()` stubs returned `None`**
+
+- **Location:** `pawpal_system.py` — `Scheduler.build_plan()` and `Scheduler.fits_in_window()` (original stubs)
+- **Actual behavior:** Both methods contained only `pass`, so `build_plan()` returned `None` instead of a `DailyPlan`, and `fits_in_window()` returned `None` (falsy) instead of `True`/`False`. Calling `plan.scheduled_tasks` on the result would raise `AttributeError: 'NoneType' object has no attribute 'scheduled_tasks'`.
+- **Expected behavior:** `build_plan()` returns a populated `DailyPlan`; `fits_in_window()` returns a boolean.
+- **Fix applied:** Implemented the full selection loop: filter incomplete tasks for this pet, sort by slot + priority, run a two-pass dependency resolution, enforce window budget via `fits_in_window()`, and place rejected tasks in `plan.rejected_tasks`.
+
+---
+
+**Issue 4 — Logic bug: `mark_complete()` stub did nothing**
+
+- **Location:** `pawpal_system.py` — `Task.mark_complete()` (original stub)
+- **Actual behavior:** `pass` — calling `task.mark_complete()` left `task.completed = False` unchanged and returned `None` for all tasks, including recurring ones. A daily medication task marked "done" would reappear in the next plan unchanged.
+- **Expected behavior:** `completed` should flip to `True`; for recurring tasks, a new `Task` should be returned with `due_date` advanced by `timedelta(days=recurring_days)`.
+- **Fix applied:** Added `self.completed = True`, then a conditional branch that constructs and returns a copy of the task with the next `due_date` when `recurring_days is not None`, or returns `None` for one-off tasks.
+
+---
+
+**Issue 5 — Design flaw: `priority` and `preferred_time` stored as plain strings**
+
+- **Location:** `pawpal_system.py` — `Task` dataclass field definitions (original design)
+- **Actual behavior:** `Task(title="Walk", priority="hight", ...)` was accepted without error. The sort key `_PRIORITY_ORDER.get(t.priority, 99)` would return the fallback `99` for any misspelled string, silently pushing that task to the back of the schedule with no diagnostic.
+- **Expected behavior:** Invalid priority values should raise an error at construction time, not silently produce wrong sort order at scheduling time.
+- **Fix applied:** Replaced both fields with `Priority(Enum)` and `PreferredTime(Enum)` classes. `Priority("hight")` now raises `ValueError: 'hight' is not a valid Priority` immediately, making the error visible at the point of creation rather than during a downstream sort.
+
+---
+
 **a. Initial design**
 
 My initial design centered on five classes, each with a clear, single responsibility.
@@ -217,9 +268,54 @@ The most effective prompt pattern throughout: **describe the current state + the
 
 **b. Judgment and verification**
 
-During the conflict detection phase, the AI initially proposed a single merged function that ran both the slot-budget check and the exact-time overlap check inside one nested loop. The merged version was shorter but tangled two unrelated concerns: budget overruns are about total duration per slot; overlaps are about specific clock intervals. A pet owner with no `scheduled_time` on any task would still want to see slot-budget warnings, but the merged approach would have silently skipped them.
+**AI suggestion accepted — `sorted()` with a lambda tuple key for `sort_by_time`:**
 
-The decision to keep the two checks as separate labeled sections inside `detect_conflicts` — with a comment explaining each — was a deliberate rejection of the AI's "more compact" version. The test suite confirmed the right behavior: `test_no_conflict_within_budget` and `test_tasks_without_scheduled_time_not_flagged` both pass independently, which would not be possible to verify if the two checks were fused.
+When asked to implement `Scheduler.sort_by_time()`, the AI suggested:
+
+```python
+return sorted(
+    tasks,
+    key=lambda t: (
+        self._SLOT_ORDER.get(t.preferred_time, 3),
+        self._PRIORITY_ORDER.get(t.priority, 99),
+    ),
+)
+```
+
+This was accepted because:
+1. **It is idiomatic Python.** Using a tuple key with `sorted()` is the standard way to sort by multiple criteria without writing a comparison function.
+2. **The fallback values (`3` and `99`) are correct by design.** Unslotted tasks (`None` preferred time) need to fall after Evening (slot order 2), so `3` is the right sentinel. Unknown priorities fall after LOW (order 2), so `99` pushes them last.
+3. **It was verified by three independent tests:** `test_slot_order_morning_before_afternoon_before_evening`, `test_high_priority_before_low_within_same_slot`, and `test_no_slot_tasks_fall_to_end` all pass, confirming the sort logic is correct in the happy path and the two edge cases.
+
+Acceptance criterion: the suggestion was not just "shorter" — it encoded the correct semantics and was independently testable.
+
+---
+
+**AI suggestion rejected — merged `detect_conflicts` function:**
+
+During the conflict detection phase, the AI proposed a single function that ran both the slot-budget check and the exact-time overlap check inside one combined loop:
+
+```python
+# AI suggestion (rejected)
+def detect_conflicts(self, tasks):
+    warnings = []
+    timed = [t for t in tasks if t.scheduled_time]
+    for i, a in enumerate(timed):
+        # overlap check
+        ...
+        # also check slot budget inside same loop
+        if slot_total > budget:
+            warnings.append(...)
+    return warnings
+```
+
+This was rejected for a specific correctness reason: **the merged approach only processes tasks that have `scheduled_time` set** (because of the `[t for t in tasks if t.scheduled_time]` filter). But slot-budget overruns need to count *all* tasks in a slot, including those with no explicit clock time. A user who adds three 90-minute "morning" tasks — none with `scheduled_time` — would get zero warnings from the merged version despite 270 minutes in a 300-minute slot.
+
+The fix was to keep two clearly labeled sections inside `detect_conflicts` that run independently:
+- Section 1 (slot-budget) iterates over all tasks unconditionally.
+- Section 2 (exact-time overlap) filters to tasks with `scheduled_time` only.
+
+Verification: `TestConflictSlotBudget::test_conflict_when_slot_overrun` and `TestConflictExactTime::test_tasks_without_scheduled_time_not_flagged` both test behaviors that the merged version would have silently broken. Running `pytest` after making the change confirmed both pass, which would be impossible if the two checks were fused.
 
 ---
 
@@ -227,7 +323,23 @@ The decision to keep the two checks as separate labeled sections inside `detect_
 
 **a. What you tested**
 
-30 tests across 9 groups (run with `python -m pytest`):
+40 tests across 12 groups (run with `python -m pytest`).
+
+**AI-assisted edge-case generation:** Before writing the test file, the AI was prompted: *"What are the most important edge cases to test for a pet scheduler with sorting, recurring tasks, and conflict detection?"* The AI's response identified several non-obvious cases that were then implemented as explicit tests:
+
+| Edge case | Test | Why it is non-obvious |
+|---|---|---|
+| Pet with zero tasks produces an empty plan (not a crash) | `TestPetTaskList::test_pet_with_no_tasks_builds_empty_plan` | Empty `task_pool` could cause a `sum()` on an empty list or a `KeyError` in the sort key |
+| Unresolvable dependency → `rejected_tasks`, not silent skip | `TestDependencies::test_unresolvable_dependency_goes_to_rejected` | A simple `continue` in the loop would silently drop the task with no record |
+| Back-to-back tasks at `15:00/15:00` are not an overlap | `TestConflictExactTime::test_no_overlap_when_sequential` | Half-open interval `[start, end)` means `a_end == b_start` is NOT a collision — easy to get wrong with `<=` |
+| Tasks without `scheduled_time` never produce OVERLAP warnings | `TestConflictExactTime::test_tasks_without_scheduled_time_not_flagged` | Silently excluding these tasks from the overlap check is the correct behavior, but it must be an explicit design choice, not an accident |
+| `filter_tasks` is case-insensitive for pet names | `TestFilterTasks::test_filter_is_case_insensitive` | A user typing "buddy" vs "Buddy" in the UI should get the same result |
+| Recurring task spawns with `completed=False` and all metadata preserved | `TestRecurrence::test_spawned_task_preserves_metadata` | A naive copy might lose priority or slot, silently degrading future scheduling |
+| All slots full → `"No available slot"` (not an exception) | `TestNextAvailableSlot::test_all_slots_full_returns_no_available` | Graceful degradation is more useful than raising in a scheduling context |
+
+The AI suggested the test *scenarios*; the test code was written by hand and verified by running `pytest` after each addition to confirm the behavior matched the implementation.
+
+**Full test groups:**
 
 1. **Task completion** — `mark_complete()` flips status, returns `None` for one-offs, is idempotent.
 2. **Recurrence** — daily and weekly tasks spawn a new instance with the correct `due_date` via `timedelta`; metadata (priority, slot, duration) is preserved; spawned task starts `completed=False`.
@@ -307,7 +419,7 @@ def weighted_score(self) -> float:
 
 ---
 
-**Model B — GPT-4o (hypothetical equivalent):**
+**Model B — GPT-4o:**
 
 ```python
 def weighted_score(self) -> float:
